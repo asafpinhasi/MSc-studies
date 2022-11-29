@@ -1,0 +1,142 @@
+# class that deals with cross validation.
+# Receives adata (or dataframe, reponse labels, and sample names) and return an iterator for k folds.
+# The iterator returns the train and test dataframes after divided by sample (to avoid dividing a sample to both train and test)
+
+import pandas as pd
+import random
+
+#receiving dataframe
+# class K_fold_validation:
+#     """Iterator that counts upward forever."""
+
+#     def __init__(self, X, y, samples, k, shuffle = True, verbose=False):
+        
+#         self.iteration = 0
+#         self.k = k
+#         self.X = X
+#         self.y = y.replace({"R" : 1, "NR": 0})
+#         self.verbose = verbose
+#         self.samples = samples
+#         self.responders, self.non_responders = self.__get_r_nr(self.y, self.samples, shuffle)
+
+    
+#     def __iter__(self):
+#         return self
+    
+#     def __next__(self):
+#         # while didn't do k iterations
+#         if self.iteration < self.k:
+           
+#             # get names of i'th train and test samples
+#             train_sample, test_sample = self.__train_val_split(self.responders, self.non_responders, self.iteration)
+#             #subsets train and test data from adata
+
+#             X_train = self.X[self.samples.apply(lambda x: x in train_sample).values]
+#             X_test = self.X[self.samples.apply(lambda x: x in test_sample).values]
+
+#             y_train = self.y[self.samples.apply(lambda x: x in train_sample).values]
+#             y_test = self.y[self.samples.apply(lambda x: x in test_sample).values]
+
+            
+#             # Prints
+#             if self.verbose:
+#                 print(f"K-Fold number {self.iteration}")
+#                 print(f'    train patients (k-1 folds): {train_sample}')
+#                 print(f'validation patients (one fold): {test_sample}')
+#             self.iteration += 1
+#             return X_train, X_test, y_train, y_test
+#         else:
+#             raise StopIteration
+            
+    
+#     def __get_r_nr(self, y, samples, shuffle):
+        
+#         non_responders = list(samples[(y == 0).values].unique())
+#         responders = list(samples[(y == 1).values].unique())
+
+#         if shuffle:
+#             random.shuffle(responders)
+#             random.shuffle(non_responders)
+
+#         return responders, non_responders
+    
+
+#     def __train_val_split(self, responders, non_responders, i, k = 5, shuffle=True, stratify=True):
+        
+#         responders_sets = [responders[int(j*len(responders)/k) : int((j+1)*len(responders)/k)] for j in range(k)]
+#         non_responders_sets = [non_responders[int(j*len(non_responders)/k) : int((j+1)*len(non_responders)/k)] for j in range(k)]
+
+#         test_set = responders_sets[i]+ non_responders_sets[i]
+#         train_set = []
+#         for j in [x for x in range(k) if x != i]:
+#             train_set += responders_sets[j] + non_responders_sets[j]
+
+#         return train_set, test_set
+
+        
+        
+ #receiving adata
+ class K_fold_validation:
+    """Iterator that counts upward forever."""
+
+    def __init__(self, adata, k, shuffle = True, verbose=False):
+        
+        self.iteration = 0
+        self.k = k
+        self.adata = adata
+        self.responders, self.non_responders = self.__get_r_nr(adata, shuffle)
+        self.verbose = verbose
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        # while didn't do k iterations
+        if self.iteration < self.k:
+            
+            # get names of i'th train and test samples
+            train_sample, test_sample = self.__train_val_split(self.responders, self.non_responders, self.iteration)
+            #subsets train and test data from adata
+            train_data = self.adata[self.adata.obs.sample_name.apply(lambda x: x in train_sample)]
+            test_data = self.adata[self.adata.obs.sample_name.apply(lambda x: x in test_sample)]
+            
+            X_train = train_data.to_df().copy()
+            X_test = test_data.to_df().copy()
+            y_train = [1 if response == "R" else 0 for response in train_data.obs.response.values]
+            y_test = [1 if response == "R" else 0 for response in test_data.obs.response.values]
+
+            
+            # Prints
+            if self.verbose:
+                print(f"K-Fold number {self.iteration}")
+                print(f'    train patients (k-1 folds): {train_sample}')
+                print(f'validation patients (one fold): {test_sample}')
+            self.iteration += 1
+            return X_train, X_test, y_train, y_test, train_data.copy(), test_data.copy()
+        else:
+            raise StopIteration
+            
+    
+    def __get_r_nr(self, adata, shuffle):
+
+        non_responders = list(adata.obs.sample_name[adata.obs.response == "NR"].unique())
+        responders = list(adata.obs.sample_name[(adata.obs.response != "NR")].unique())
+
+        if shuffle:
+            random.shuffle(responders)
+            random.shuffle(non_responders)
+
+        return responders, non_responders
+    
+
+    def __train_val_split(self, responders, non_responders, i, k = 5, shuffle=True, stratify=True):
+        
+        responders_sets = [responders[int(j*len(responders)/k) : int((j+1)*len(responders)/k)] for j in range(k)]
+        non_responders_sets = [non_responders[int(j*len(non_responders)/k) : int((j+1)*len(non_responders)/k)] for j in range(k)]
+
+        test_set = responders_sets[i]+ non_responders_sets[i]
+        train_set = []
+        for j in [x for x in range(k) if x != i]:
+            train_set += responders_sets[j] + non_responders_sets[j]
+
+        return train_set, test_set    
