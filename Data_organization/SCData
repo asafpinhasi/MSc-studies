@@ -1,0 +1,152 @@
+# contains functions to deal with data located in - C:\Users\KerenYlab\Downloads\GSE120575_Sade_Feldman_melanoma_single_cells_TPM_GEO.txt.gz
+# organizes, transforms and manipulates the data for future analysis
+# uses anndata object as a base for annotating and saving the single-cell data
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import re
+import pickle as pk
+
+class SCData:
+    PATH = r'C:\Users\KerenYlab\Asaf\jupyterLab' + "\\"
+    
+    def __init__(self, adata_exists, file_name = r"C:\Users\KerenYlab\Downloads\GSE120575_Sade_Feldman_melanoma_single_cells_TPM_GEO.txt.gz"):
+        if adata_exists:
+            self.load_data(file_name)
+        else:
+            df1 = pd.read_csv(file_name, compression='gzip', nrows = 1, delimiter = '\t')
+            df2 = pd.read_csv(file_name, compression='gzip', delimiter = '\t', skiprows = 1)
+            self.__arrange_data(df1, df2)
+        
+    def __arrange_data(self, df1, df2):
+        # align first line of data to the rest (a artifact of changing environments)
+        df1.drop(df1.columns.values[0], axis=1, inplace=True)
+        df2 = df2.transpose()
+        last_name = df2.index.values[-1]
+        df2.drop(last_name, axis = 0, inplace = True)
+        df2.index.values[:-1] = df2.index.values[1:]
+        df2.index.values[-1] = last_name
+        
+        #create an annotated data object
+        self.adata = sc.AnnData(csr_matrix(df2))
+        self.adata.obs_names = df2.index
+        self.adata.var_names = df2.columns
+        
+        #gets sample IDs, and annotates the samples by patient numbers and sample time (pre/post)
+        self.adata.obs['ID'] = df1.columns
+        self.adata.layers['log_transformed'] = np.log1p(self.adata.X)        
+        self.__get_sample_information()
+
+        self.adata.raw = self.adata
+        
+        self.__base_adata = self.adata.copy()
+       
+    
+    def __get_sample_information(self):
+        samples = [sample.split('.')[0] for sample in self.adata.obs.index]
+        sample_name = [self.__sample_name(sample) for sample in samples]
+        
+        samples = [sample.split('_') for sample in samples]
+        time, patient = zip(*[(sample[0],sample[1]) for sample in samples])
+        sample_num = [sample[2] if len(sample) == 3 else "1" for sample in samples]
+        
+        self.adata.obs['patient_number'] = patient
+        self.adata.obs['time'] = time
+        self.adata.obs['sample_number'] = sample_num
+        self.adata.obs['sample_name'] = sample_name
+        
+                       
+    def __sample_name(self, name):
+        last_digit = re.search(r'(\d)[^\d]*$',name)
+        return name[:last_digit.start()+1]
+    
+    
+    def get_response(self, file_name = 'sample_response.xlsx'):
+        df = pd.read_excel(PATH + file_name, index_col = 1)
+        responses = [df.at[name, "Response status; R-responder, NR-non-responder"].replace(" ", "") for name in self.adata.obs.sample_name.values]
+        self.adata.obs['response'] = responses    
+        
+        
+    def get_clusters(self, file_name = 'cluster_annotation.xlsx'):
+        clusters = pd.read_excel(PATH + file_name, header = 0, index_col = 0)
+        cluster_name = clusters.columns[0]
+        self.adata.obs = pd.merge(self.adata.obs, clusters, left_on='ID', right_index=True, how = "left")
+        self.filter_nonanotated_samples()
+        self.adata.obs[cluster_name] = self.adata.obs[cluster_name].astype(int)
+
+    
+    def filter_nonanotated_samples(self):
+        self.adata = self.adata[~self.adata.obs.isnull().any(axis=1)]
+        
+        
+    def filter_highly_variable(self, n_highly_variable):
+        sc.pp.highly_variable_genes(self.adata, n_top_genes=n_highly_variable)
+        self.adata = self.adata[:, self.adata.var.highly_variable]
+    
+    def filter_genes(self, genes):
+        self.adata = self.adata[:,genes]
+    
+    def filter_non_coding(self, file_name = 'protein_coding_genes.xlsx'):
+        protein_coding = pd.read_excel(PATH + file_name, header = 0, index_col = 0)
+        protein_coding_names = list(set(protein_coding.index).intersection(self.adata.var.index)) #leaves only coding genes that are IN adata
+        self.adata = self.adata[:, protein_coding_names]
+
+        
+    def get_cell_types(self):
+        annotations = Annotations(self.get_adata())
+        self.adata.obs["cell_type"] = annotations.get_cell_types(self.get_adata())
+        
+        
+    def get_extended_cell_types(self):
+        annotations = Annotations(self.get_adata())
+        anno = annotations.get_annotations()
+        cell_to_numbers = {}
+        for cell_type in anno.index:
+            cell_to_numbers[cell_type] = set(anno.loc[cell_type])
+
+        for cell_type in anno.index:
+            self.adata.obs[cell_type] = [self.__cell_from_type(cell_to_numbers, annotations, cell_name, cell_type) for cell_name in self.adata.obs.ID.values]
+        return anno.index
+            
+    def __cell_from_type(self,cell_to_numbers, annotations, cell_name, cell_type):
+        sample_names = annotations.get_sample_names()
+        if cell_name in sample_names.index and sample_names.loc[cell_name].cell_numbers in cell_to_numbers[cell_type]:
+            return 1
+        return 0
+    
+    
+    def get_adata(self):
+        return self.adata.copy()
+    
+    
+    #saves a base copy of adata for future reverting
+    def save_to_base(self):
+        self.__base_adata = self.adata.copy()
+    
+    
+    #reverts adata to base as needed
+    def revert(self):
+        self.adata = self.__base_adata
+        self.__base_adata = self.adata.copy()
+        
+        
+    def __get_patient_number(self, name):
+        return re.search('[0-9]+', name).group()
+
+    
+    def __get_sample_time(self, name):
+        if name[0:3] == "Pre":
+            return "Pre"
+        return "Post"
+    
+    
+    def save_data(self, file_name):
+        with open(self.PATH + file_name + '.pickle', 'wb') as file:
+            pk.dump(self.adata, file)
+    
+    
+    def load_data(self, file_name):
+        with open(self.PATH + file_name + '.pickle', 'rb') as file:
+            self.adata = pk.load(file)
+        self.__base_adata = self.adata.copy()
