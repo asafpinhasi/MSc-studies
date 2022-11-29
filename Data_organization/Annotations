@@ -1,0 +1,58 @@
+# gets cell type annotation for the SCData annotations
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import re
+import pickle as pk
+
+
+class Annotations:
+    PATH = r'C:\Users\KerenYlab\Asaf\jupyterLab' + "\\"
+
+    def __init__(self, adata):
+        #reading annotation and sample names into dataframes
+        self.annotations = pd.read_csv(PATH + 'Data_for_Ofir.csv', header = None, index_col = 0)
+        self.sample_names = pd.read_csv(PATH + 'sample_name_full_for_Ofir.csv', header = None, index_col = 0)
+        self.sample_names.columns = ['cell_numbers']
+        self.__filter_annotations(adata)
+        
+    def __filter_annotations(self, adata):
+        #filter only names in sample_names that exist in adata.ID
+        num_to_name = np.array([True if cell_name in adata.obs.ID.values else False for cell_name in self.sample_names.index])
+        self.sample_names = self.sample_names[num_to_name]
+        # filtered_names.size -> 16105 - important! less than the names in adata.ID - 16291
+
+    def get_annotations(self):
+        return self.annotations.copy()
+    
+    def get_sample_names(self):
+        return self.sample_names.copy()
+    
+    def get_cell_types(self, adata):
+        #load bio-markers for cell classification
+        immune_cell_markers = pd.read_excel(PATH + 'ImmuneCellsMarkersUpdated.csv', header = None, index_col = 0)
+        immune_cell_markers.loc['Double negative ']  = [None for i in immune_cell_markers.columns]
+
+        # check the specificity of each cell_type according to the number of genes characterizing it.
+        # sort the annotation according to the specificity for future use
+        specificity = [immune_cell_markers.loc[row].count() for row in self.annotations.index]
+        self.annotations['specificity'] = specificity
+        self.annotations.sort_values(by = 'specificity', inplace = True)
+        self.annotations.drop('specificity', axis = 1, inplace = True)
+
+        # dictionary of cell numbers to cell types. Assigns the most specific cell type because annotation is sorted
+        num_to_type = {}
+        for row in self.annotations.index:
+            for col in self.annotations.columns:
+                num_to_type[self.annotations.at[row, col]] = row
+
+
+        # goes over all cells in adata, and creates a cell_type list correspornding to them (using dictionary)
+        # assigns the list as 'cell_type' column in adata
+        cell_types = [num_to_type.get(self.sample_names.cell_numbers[name], None) \
+                      if name in self.sample_names.cell_numbers else None\
+                      for name in adata.obs['ID'].values]
+        return cell_types
+        # all the cells that are in adata but not in the annotation - ends with L001_T_enriched
+        # sample_names.index.symmetric_difference(adata.obs.ID)
